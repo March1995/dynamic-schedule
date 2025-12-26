@@ -11,7 +11,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
-import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 
 @Component
@@ -50,6 +49,11 @@ public class JobExecutor implements Job {
         String methodName = context.getMergedJobDataMap().getString("methodName");
         String methodParams = context.getMergedJobDataMap().getString("methodParams");
         
+        // 执行任务并记录日志
+        executeAndLogJob(jobName, jobGroup, beanName, methodName, methodParams);
+    }
+    
+    private void executeAndLogJob(String jobName, String jobGroup, String beanName, String methodName, String methodParams) {
         JobExecutionLog log = new JobExecutionLog();
         log.setJobName(jobName);
         log.setJobGroup(jobGroup);
@@ -59,41 +63,50 @@ public class JobExecutor implements Job {
         log.setStartTime(LocalDateTime.now());
         
         long startTime = System.currentTimeMillis();
+        boolean success = false;
+        String errorMessage = null;
+        
         try {
-            // 检查Bean是否存在
-            if (!applicationContext.containsBean(beanName)) {
-                throw new RuntimeException("找不到指定的Bean: " + beanName);
-            }
-            
-            Object target = applicationContext.getBean(beanName);
-            Method method;
-            if (methodParams != null && !methodParams.isEmpty()) {
-                method = target.getClass().getMethod(methodName, String.class);
-                method.invoke(target, methodParams);
-            } else {
-                method = target.getClass().getMethod(methodName);
-                method.invoke(target);
-            }
-            
-            long endTime = System.currentTimeMillis();
-            log.setEndTime(LocalDateTime.now());
-            log.setDuration(endTime - startTime);
-            log.setStatus(1); // 成功
-            
+            // 执行任务（前置操作）
+            executeJob(beanName, methodName, methodParams);
+            success = true;
         } catch (Exception e) {
+            errorMessage = e.getMessage();
+            logger.error("执行定时任务失败: {}", e.getMessage());
+        } finally {
+            // 记录结束时间等信息（后置操作）
             long endTime = System.currentTimeMillis();
             log.setEndTime(LocalDateTime.now());
             log.setDuration(endTime - startTime);
-            log.setStatus(0); // 失败
-            log.setErrorMessage(e.getMessage());
-            logger.error("执行定时任务失败: ", e);
-        } finally {
+            log.setStatus(success ? 1 : 0); // 1-成功，0-失败
+            if (errorMessage != null) {
+                log.setErrorMessage(errorMessage);
+            }
             log.setCreatedAt(LocalDateTime.now());
+            
+            // 保存日志
             try {
                 jobExecutionLogService.saveLog(log);
             } catch (Exception e) {
                 logger.error("保存任务执行日志失败: ", e);
             }
+        }
+    }
+    
+    private void executeJob(String beanName, String methodName, String methodParams) throws Exception {
+        // 检查Bean是否存在
+        if (!applicationContext.containsBean(beanName)) {
+            throw new RuntimeException("找不到指定的Bean: " + beanName);
+        }
+        
+        Object target = applicationContext.getBean(beanName);
+        java.lang.reflect.Method method;
+        if (methodParams != null && !methodParams.isEmpty()) {
+            method = target.getClass().getMethod(methodName, String.class);
+            method.invoke(target, methodParams);
+        } else {
+            method = target.getClass().getMethod(methodName);
+            method.invoke(target);
         }
     }
 }
